@@ -29,10 +29,11 @@ maintenance = { status = "actively-developed" }
 [lib]
 name = "rusqlite"
 
-[workspace]
-members = ["libsqlite3-sys"]
+#[workspace]
+# members = ["libsqlite3-sys"]
 
 [features]
+default = ["bundled"]
 load_extension = []
 # hot-backup interface: 3.6.11 (2009-02-18)
 backup = []
