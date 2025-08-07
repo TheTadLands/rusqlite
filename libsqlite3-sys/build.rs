@@ -46,6 +46,8 @@ fn main() {
         return;
     }
 
+    println!("cargo::rustc-link-lib=c");
+
     println!("cargo:rerun-if-env-changed=LIBSQLITE3_SYS_USE_PKG_CONFIG");
     if env::var_os("LIBSQLITE3_SYS_USE_PKG_CONFIG").is_some_and(|s| s != "0")
         || cfg!(feature = "loadable_extension")
