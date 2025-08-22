@@ -148,6 +148,10 @@ mod version;
 #[cfg_attr(docsrs, doc(cfg(feature = "vtab")))]
 pub mod vtab;
 
+#[cfg(feature = "vtab")]
+#[cfg_attr(docsrs, doc(cfg(feature = "vtab")))]
+mod twizzler;
+
 pub(crate) mod util;
 pub(crate) use util::SmallCString;
 
@@ -453,7 +457,11 @@ impl Connection {
     #[inline]
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let flags = OpenFlags::default();
-        Self::open_with_flags(path, flags)
+
+        let conn = Self::open_with_flags(path, flags)?;
+
+        conn.setup_twz_vtab();
+        Ok(conn)
     }
 
     /// Open a new connection to an in-memory SQLite database.
@@ -464,7 +472,10 @@ impl Connection {
     #[inline]
     pub fn open_in_memory() -> Result<Self> {
         let flags = OpenFlags::default();
-        Self::open_in_memory_with_flags(flags)
+        let conn = Self::open_in_memory_with_flags(flags)?;
+
+        conn.setup_twz_vtab();
+        Ok(conn)
     }
 
     /// Open a new connection to a SQLite database.
@@ -479,11 +490,14 @@ impl Connection {
     #[inline]
     pub fn open_with_flags<P: AsRef<Path>>(path: P, flags: OpenFlags) -> Result<Self> {
         let c_path = path_to_cstring(path.as_ref())?;
-        InnerConnection::open_with_flags(&c_path, flags, None).map(|db| Self {
+        let conn = InnerConnection::open_with_flags(&c_path, flags, None).map(|db| Self {
             db: RefCell::new(db),
             cache: StatementCache::with_capacity(STATEMENT_CACHE_DEFAULT_CAPACITY),
             transaction_behavior: TransactionBehavior::Deferred,
-        })
+        })?;
+
+        conn.setup_twz_vtab();
+        Ok(conn)
     }
 
     /// Open a new connection to a SQLite database using the specific flags and
@@ -504,11 +518,14 @@ impl Connection {
     ) -> Result<Self> {
         let c_path = path_to_cstring(path.as_ref())?;
         let c_vfs = str_to_cstring(vfs)?;
-        InnerConnection::open_with_flags(&c_path, flags, Some(&c_vfs)).map(|db| Self {
+        let conn = InnerConnection::open_with_flags(&c_path, flags, Some(&c_vfs)).map(|db| Self {
             db: RefCell::new(db),
             cache: StatementCache::with_capacity(STATEMENT_CACHE_DEFAULT_CAPACITY),
             transaction_behavior: TransactionBehavior::Deferred,
-        })
+        })?;
+
+        conn.setup_twz_vtab();
+        Ok(conn)
     }
 
     /// Open a new connection to an in-memory SQLite database.
