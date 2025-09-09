@@ -460,7 +460,9 @@ impl Connection {
 
         let conn = Self::open_with_flags(path, flags)?;
 
+        #[cfg(target_os = "twizzler")]
         conn.setup_twz_vtab();
+
         Ok(conn)
     }
 
@@ -474,7 +476,9 @@ impl Connection {
         let flags = OpenFlags::default();
         let conn = Self::open_in_memory_with_flags(flags)?;
 
+        #[cfg(target_os = "twizzler")]
         conn.setup_twz_vtab();
+
         Ok(conn)
     }
 
@@ -496,7 +500,9 @@ impl Connection {
             transaction_behavior: TransactionBehavior::Deferred,
         })?;
 
+        #[cfg(target_os = "twizzler")]
         conn.setup_twz_vtab();
+
         Ok(conn)
     }
 
@@ -524,7 +530,9 @@ impl Connection {
             transaction_behavior: TransactionBehavior::Deferred,
         })?;
 
+        #[cfg(target_os = "twizzler")]
         conn.setup_twz_vtab();
+        
         Ok(conn)
     }
 
