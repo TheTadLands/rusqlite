@@ -5,6 +5,9 @@ use crate::types::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+#[cfg(target_os = "twizzler")]
+use naming::{static_naming_factory, GetFlags, NsNodeKind, StaticNamingHandle as NamingHandle};
+
 impl Connection {
     /// Sets up the Twizzler virtual table module for this connection.
         pub fn setup_twz_vtab(&self) {
