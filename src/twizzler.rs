@@ -6,7 +6,37 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 #[cfg(target_os = "twizzler")]
-use naming::{static_naming_factory, GetFlags, NsNodeKind, StaticNamingHandle as NamingHandle};
+use {
+    naming::GetFlags,
+    twizzler::{
+        collections::hachage::PersistentHashMap, 
+        object::{Object, ObjectBuilder}
+    }
+};
+
+#[cfg(target_os = "twizzler")]
+fn open_or_create_hashtable_object<T: Debug + Invariant>(
+    name: &str,
+) -> Result<PersistentHashMap<T, T>> {
+    let mut nh = naming::dynamic_naming_factory().unwrap();
+    let name = format!("/data/vtab-{}", name);
+    let vo = if let Ok(node) = nh.get(&name, GetFlags::empty()) {
+        println!("reopened: {:?}", node.id);
+        let backing = Object::map(node.id, MapFlags::PERSIST | MapFlags::READ | MapFlags::WRITE).into_diagnostic()?;
+        let phm = PersistentHashMap::from(backing);
+
+        Ok(phm)
+    } else {
+        let vo = PersistentHashMap::with_builder(
+            ObjectBuilder::default().persist()
+        ).unwrap();
+        let _ = nh.remove(&name);
+        nh.put(&name, vo.object().id()).into_diagnostic()?;
+        Ok(vo)
+    };
+
+    vo
+}
 
 impl Connection {
     /// Sets up the Twizzler virtual table module for this connection.
