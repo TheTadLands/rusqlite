@@ -1,37 +1,45 @@
+#![cfg(target_os = "twizzler")]
+
 use crate::vtab::{update_module, CreateVTab, UpdateVTab, VTab, VTabCursor, VTabKind};
 use crate::Connection;
-use crate::types::Value;
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use std::fmt::Debug;
 
-#[cfg(target_os = "twizzler")]
-use {
-    naming::GetFlags,
-    twizzler::{
-        collections::hachage::PersistentHashMap, 
-        object::{Object, ObjectBuilder}
-    }
+use naming::GetFlags;
+use twizzler::{
+    collections::{
+        hachage::PersistentHashMap,
+    },
+    object::{Object, ObjectBuilder},
+    marker::Invariant,
 };
+use twizzler_rt_abi::object::MapFlags;
 
-#[cfg(target_os = "twizzler")]
-fn open_or_create_hashtable_object<T: Debug + Invariant>(
+mod value;
+use value::TwzValue;
+mod columnstore;
+use columnstore::{ColumnStore, MAX_COLUMNS};
+
+fn open_or_create_hashtable_object(
     name: &str,
-) -> Result<PersistentHashMap<T, T>> {
+) -> crate::Result<PersistentHashMap<i64, Row>> {
     let mut nh = naming::dynamic_naming_factory().unwrap();
     let name = format!("/data/vtab-{}", name);
     let vo = if let Ok(node) = nh.get(&name, GetFlags::empty()) {
         println!("reopened: {:?}", node.id);
-        let backing = Object::map(node.id, MapFlags::PERSIST | MapFlags::READ | MapFlags::WRITE).into_diagnostic()?;
+        let backing = Object::map(node.id, MapFlags::PERSIST | MapFlags::READ | MapFlags::WRITE)
+            .map_err(|e| crate::Error::ModuleError(format!("Failed to map object: {}", e)))?;
         let phm = PersistentHashMap::from(backing);
-
         Ok(phm)
     } else {
         let vo = PersistentHashMap::with_builder(
             ObjectBuilder::default().persist()
         ).unwrap();
         let _ = nh.remove(&name);
-        nh.put(&name, vo.object().id()).into_diagnostic()?;
+        nh.put(&name, vo.object().id())
+            .map_err(|e| crate::Error::ModuleError(format!("Failed to put object in naming: {}", e)))?;
         Ok(vo)
     };
 
@@ -48,13 +56,15 @@ impl Connection {
 }
 
 #[derive(Debug, Clone)]
+#[repr(C)]
 struct Row {
     id: i64,
-    columns: Vec<Value>,
+    columns: ColumnStore,
 }
+unsafe impl Invariant for Row {}
 
 struct DataStore {
-    hm: HashMap<i64, Row>,
+    hm: PersistentHashMap<i64, Row>,
 }
 #[repr(C)]
 struct TwzVTab {
@@ -115,13 +125,17 @@ unsafe impl<'vtab> VTab<'vtab> for TwzVTab {
             columns.push(format!("{} {}", col_name, col_type));
         }
 
+        if columns.len() > MAX_COLUMNS {
+            return Err(crate::Error::ModuleError(format!("Too many columns specified (max {})", MAX_COLUMNS)));
+        }
+
         let schema = format!("CREATE TABLE {}({})", table_name, columns.join(", "));
         println!("TwzVTab schema: {}", schema);
 
         let vtab = TwzVTab {
             base: crate::ffi::sqlite3_vtab::default(),
             data: Arc::new(RwLock::new(DataStore {
-                hm: HashMap::new(),
+                hm: open_or_create_hashtable_object(&table_name).map_err(|e| crate::Error::ModuleError(format!("Failed to open or create hashtable object: {:?}", e)))?,
             })),
         };
 
@@ -181,8 +195,11 @@ impl<'vtab> UpdateVTab<'vtab> for TwzVTab {
             crate::types::ValueRef::Integer(_) => row_id_ref.as_i64().unwrap(),
             _ => data.hm.len() as i64 + 1,
         };
-        let column_values: Vec<Value> = args.iter().skip(2).map(|v| v.into()).collect();
-        data.hm.insert(row_id, Row { id: row_id, columns: column_values });
+        let column_values: Vec<TwzValue> = args.iter().skip(2).map(|v| v.into()).collect();
+        let columns = ColumnStore::from_values(&column_values)
+            .map_err(|e| crate::Error::ModuleError(format!("Failed to create ColumnStore: {}", e)))?;
+
+        data.hm.insert(row_id, Row { id: row_id, columns });
         Ok(row_id)
     }
 
@@ -203,7 +220,9 @@ impl<'vtab> UpdateVTab<'vtab> for TwzVTab {
         
         // Update column values (skip first two args which are rowids)
         if args.len() > 2 {
-            row.columns = args_iter.map(|v| v.into()).collect();
+            let column_values: Vec<TwzValue> = args_iter.map(|v| v.into()).collect();
+            row.columns = ColumnStore::from_values(&column_values)
+                .map_err(|e| crate::Error::ModuleError(format!("Failed to create ColumnStore: {}", e)))?;
         }
         
         // Insert with new rowid (even if same as old)
@@ -243,15 +262,16 @@ unsafe impl VTabCursor for TwzCursor {
         
         let row_id = self.current_results[current_idx];
 
-        let result = {
-            let data = self.data.read().unwrap();
-            if let Some(row) = data.hm.get(&row_id) {
-                let column_data = row.columns.get(i as usize).unwrap();
+        let data = self.data.read().unwrap();
+        if let Some(row) = data.hm.get(&row_id) {
+            if let Some(column_data) = row.columns.get_column(i as usize) {
                 ctx.set_result(column_data)?;
             } else {
-                ctx.set_result(&Value::Null)?;
+                ctx.set_result(&TwzValue::Null)?;
             }
-        };
+        } else {
+            ctx.set_result(&TwzValue::Null)?;
+        }
 
         Ok(())
     }

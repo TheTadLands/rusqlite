@@ -141,6 +141,7 @@ rusqlite-macros = { path = "rusqlite-macros", version = "0.4.0", optional = true
 [target.'cfg(target_os = "twizzler")'.dependencies]
 naming = { path = "../../lib/naming" }
 twizzler = { path = "../../lib/twizzler" }
+twizzler-rt-abi = { path = "../../abi/rt-abi" }
 
 [dev-dependencies]
 doc-comment = "0.3"
