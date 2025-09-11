@@ -1,6 +1,13 @@
 #![cfg(target_os = "twizzler")]
+/// Twizzler virtual table implementation for rusqlite
+/// Future work includes:
+/// - Implementing the ability to add indexes and query optimization in best_index (Will likely require changes to the connection struct to intercept queries,
+/// though I may be wrong)
+/// - Filtering results before returning them to SQLite in filter for more constraints
+/// - RowID column handling (ex WITHOUT ROWID tables, or queries based on RowID)
 
-use crate::vtab::{update_module, CreateVTab, UpdateVTab, VTab, VTabCursor, VTabKind};
+use crate::vtab::{update_module, CreateVTab, UpdateVTab, VTab, VTabCursor, VTabKind, IndexConstraintOp, Values};
+
 use crate::Connection;
 
 use std::collections::HashMap;
@@ -78,6 +85,7 @@ struct TwzCursor {
     position: i64,
     current_results: Vec<i64>,
     data: Arc<RwLock<DataStore>>,
+    // constraints: Option<Values<'a>>,
 }
 
 struct TwzConfig;
@@ -143,11 +151,29 @@ unsafe impl<'vtab> VTab<'vtab> for TwzVTab {
     }
 
     fn best_index(&self, info: &mut crate::vtab::IndexInfo) -> crate::Result<()> {
-        // let mut constraints = info.constraints_and_usages();
-        // for (constraint, mut  usage) in constraints {
-        //     usage.set_omit(true);
-        //     usage.set_argv_index(0);
-        // }
+        let mut constraints = info.constraints_and_usages();
+        let mut argv_index = 1; // Any argv > 0 is passed to filter in filter()
+        let mut idx_num = 0;
+        for (constraint, mut usage) in constraints {
+            // Example handling for constraints. More complex logic will be necessary here to handle multiple instances of the same constraint type,
+            // as well as if there are more than one constraint. I don't think filter is passed any info to indicate which constraint is which in args.
+            match constraint.operator() {
+                IndexConstraintOp::SQLITE_INDEX_CONSTRAINT_EQ => {
+                    // We can handle equality constraints.
+                    usage.set_omit(false);
+                    // ArgvIndex 
+                    usage.set_argv_index(argv_index);
+                    argv_index += 1;
+                    // Set idx_num to indicate that we need to filter on this column.
+                    idx_num |= 1 << 2; // Example: using bit 2 to indicate equality constraint
+                }  
+                _ => {
+                    // We don't handle this constraint at the moment, so we can just leave everything as it is.
+                }
+            };
+            usage.set_omit(false);
+            // usage.set_argv_index(0);
+        }
         info.set_estimated_cost(1000.0);
         info.set_estimated_rows(1000);
         Ok(())
@@ -159,6 +185,7 @@ unsafe impl<'vtab> VTab<'vtab> for TwzVTab {
             position: 0,
             current_results: Vec::new(),
             data: self.data.clone(),
+            // constraints: None,
         })
     }
 }
@@ -233,6 +260,7 @@ impl<'vtab> UpdateVTab<'vtab> for TwzVTab {
 }
 
 unsafe impl VTabCursor for TwzCursor {
+    // Index number and string are best_index implementation dependent, with args containing the values to compare against. 
     fn filter(&mut self, idx_num: std::os::raw::c_int, idx_str: Option<&str>, args: &crate::vtab::Values<'_>) -> crate::Result<()> {
         let data = self.data.read().unwrap();
         self.current_results = data.hm.keys().cloned().collect();
@@ -289,3 +317,4 @@ unsafe impl VTabCursor for TwzCursor {
         }
     }
 }
+
