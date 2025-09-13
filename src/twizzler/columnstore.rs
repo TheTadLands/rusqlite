@@ -1,7 +1,7 @@
 use crate::twizzler::value::TwzValue;
 use twizzler::marker::Invariant;
 
-pub const MAX_COLUMNS: usize = 32;
+pub const MAX_COLUMNS: usize = 4;
 
 #[derive(Debug, Clone)]
 #[repr(C)]
