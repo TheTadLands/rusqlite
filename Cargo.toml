@@ -201,3 +201,6 @@ rustdoc-args = ["--cfg", "docsrs"]
 [package.metadata.playground]
 features = ["bundled-full"]
 all-features = false
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("twizzler"))'] }
