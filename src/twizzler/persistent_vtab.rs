@@ -52,14 +52,6 @@ fn open_or_create_hashtable_object(
     vo
 }
 
-
-fn create_hashtable_object() -> crate::Result<PersistentHashMap<i64, Row>> {
-    let vo = PersistentHashMap::with_builder(
-        ObjectBuilder::default().persist()
-    ).unwrap();
-    Ok(vo)
-}
-
 #[derive(Debug, Clone)]
 #[repr(C)]
 struct Row {
@@ -143,8 +135,7 @@ unsafe impl<'vtab> VTab<'vtab> for TwzVTab {
         let vtab = TwzVTab {
             base: crate::ffi::sqlite3_vtab::default(),
             data: Arc::new(RwLock::new(DataStore {
-                hm: create_hashtable_object().map_err(|e| crate::Error::ModuleError(format!("Failed to create hashtable object: {:?}", e)))?,
-                // hm: open_or_create_hashtable_object(&table_name).map_err(|e| crate::Error::ModuleError(format!("Failed to open or create hashtable object: {:?}", e)))?,
+                hm: open_or_create_hashtable_object(&table_name).map_err(|e| crate::Error::ModuleError(format!("Failed to open or create hashtable object: {:?}", e)))?,
                 session: None,
             })),
         };
