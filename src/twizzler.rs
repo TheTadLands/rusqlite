@@ -1,17 +1,15 @@
 #![cfg(target_os = "twizzler")]
-use crate::vtab::update_module;
+use crate::vtab::{update_module, update_module_with_tx};
 use crate::Connection;
 
 mod value;
-use value::TwzValue;
-mod columnstore;
-use columnstore::{ColumnStore, MAX_COLUMNS};
+mod rowstore;
 
 mod transient_vtab;
-use transient_vtab::{TwzVTab as TransientVTab, TwzCursor as TransientVTabCursor};
+use transient_vtab::{TwzVTab as TransientVTab};
 
 mod persistent_vtab;
-use persistent_vtab::{TwzVTab as PersistentVTab, TwzCursor as PersistentVTabCursor};
+use persistent_vtab::{TwzVTab as PersistentVTab};
 
 impl Connection {
     /// Sets up the Twizzler virtual table module for this connection.
@@ -20,7 +18,7 @@ impl Connection {
             self.create_module("twz_transient_vtab", module, None)
                 .expect("Failed to create twz_transient_vtab module");
 
-            let module = update_module::<PersistentVTab>();
+            let module = update_module_with_tx::<PersistentVTab>();
             self.create_module("twz_persistent_vtab", module, None)
                 .expect("Failed to create twz_persistent_vtab module");
         }

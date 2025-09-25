@@ -5,12 +5,12 @@ pub const MAX_COLUMNS: usize = 4;
 
 #[derive(Debug, Clone)]
 #[repr(C)]
-pub struct ColumnStore {
+pub struct RowStore {
     column_count: u32,
     columns: [TwzValue; MAX_COLUMNS],
 }
 
-impl ColumnStore {
+impl RowStore {
     pub fn new() -> Self {
         Self {
             column_count: 0,
@@ -67,4 +67,4 @@ impl ColumnStore {
     }
 }
 
-unsafe impl Invariant for ColumnStore {}
+unsafe impl Invariant for RowStore {}

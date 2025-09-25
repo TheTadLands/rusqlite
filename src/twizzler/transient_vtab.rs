@@ -8,7 +8,7 @@
 /// - I believe users need to re-create the table every time it is reopened. We could try storing the schema somewhere, but we also probably need to have some
 ///  way to communicate to SQLite that these tables already exist.
 
-use crate::vtab::{update_module, CreateVTab, UpdateVTab, VTab, VTabCursor, VTabKind, IndexConstraintOp, Values};
+use crate::vtab::{CreateVTab, UpdateVTab, VTab, VTabCursor, VTabKind};
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -16,13 +16,13 @@ use std::fmt::Debug;
 
 
 use crate::twizzler::value::TwzValue;
-use crate::twizzler::columnstore::{ColumnStore, MAX_COLUMNS};
+use crate::twizzler::rowstore::{RowStore, MAX_COLUMNS};
 
 #[derive(Debug, Clone)]
 #[repr(C)]
 struct Row {
     id: i64,
-    columns: ColumnStore,
+    columns: RowStore,
 }
 
 struct DataStore {
@@ -51,8 +51,8 @@ unsafe impl<'vtab> VTab<'vtab> for TwzVTab {
     type Cursor = TwzCursor;
 
     fn connect(
-        db: &mut crate::vtab::VTabConnection,
-        aux: Option<&Self::Aux>,
+        _db: &mut crate::vtab::VTabConnection,
+        _aux: Option<&Self::Aux>,
         args: &[&[u8]],
     ) -> crate::Result<(String, Self)> {
         let mut columns = Vec::new();
@@ -178,8 +178,8 @@ impl<'vtab> UpdateVTab<'vtab> for TwzVTab {
             _ => data.hm.len() as i64 + 1,
         };
         let column_values: Vec<TwzValue> = args.iter().skip(2).map(|v| v.into()).collect();
-        let columns = ColumnStore::from_values(&column_values)
-            .map_err(|e| crate::Error::ModuleError(format!("Failed to create ColumnStore: {}", e)))?;
+        let columns = RowStore::from_values(&column_values)
+            .map_err(|e| crate::Error::ModuleError(format!("Failed to create RowStore: {}", e)))?;
 
         data.hm.insert(row_id, Row { id: row_id, columns });
         Ok(row_id)
@@ -203,8 +203,8 @@ impl<'vtab> UpdateVTab<'vtab> for TwzVTab {
         // Update column values (skip first two args which are rowids)
         if args.len() > 2 {
             let column_values: Vec<TwzValue> = args_iter.map(|v| v.into()).collect();
-            row.columns = ColumnStore::from_values(&column_values)
-                .map_err(|e| crate::Error::ModuleError(format!("Failed to create ColumnStore: {}", e)))?;
+            row.columns = RowStore::from_values(&column_values)
+                .map_err(|e| crate::Error::ModuleError(format!("Failed to create RowStore: {}", e)))?;
         }
         
         // Insert with new rowid (even if same as old)
@@ -216,7 +216,7 @@ impl<'vtab> UpdateVTab<'vtab> for TwzVTab {
 
 unsafe impl VTabCursor for TwzCursor {
     // Index number and string are best_index implementation dependent, with args containing the values to compare against. 
-    fn filter(&mut self, idx_num: std::os::raw::c_int, idx_str: Option<&str>, args: &crate::vtab::Values<'_>) -> crate::Result<()> {
+    fn filter(&mut self, _idx_num: std::os::raw::c_int, _idx_str: Option<&str>, _args: &crate::vtab::Values<'_>) -> crate::Result<()> {
         let data = self.data.read().unwrap();
         self.current_results = data.hm.keys().cloned().collect();
         self.position = 0;

@@ -8,16 +8,16 @@
 /// - I believe users need to re-create the table every time it is reopened. We could try storing the schema somewhere, but we also probably need to have some
 ///  way to communicate to SQLite that these tables already exist.
 
-use crate::vtab::{update_module, CreateVTab, UpdateVTab, VTab, VTabCursor, VTabKind, IndexConstraintOp, Values};
+use crate::vtab::{CreateVTab, UpdateVTab, TransactionVTab, VTab, VTabCursor, VTabKind};
 
-use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::fmt::Debug;
+use std::ptr::NonNull;
 
 use naming::GetFlags;
 use twizzler::{
     collections::{
-        hachage::PersistentHashMap,
+        hachage::{PersistentHashMap, PHMsession},
     },
     object::{Object, ObjectBuilder},
     marker::Invariant,
@@ -25,7 +25,7 @@ use twizzler::{
 use twizzler_rt_abi::object::MapFlags;
 
 use crate::twizzler::value::TwzValue;
-use crate::twizzler::columnstore::{ColumnStore, MAX_COLUMNS};
+use crate::twizzler::rowstore::{RowStore, MAX_COLUMNS};
 
 // Stolen from persistent-hashmap-test
 fn open_or_create_hashtable_object(
@@ -64,13 +64,15 @@ fn create_hashtable_object() -> crate::Result<PersistentHashMap<i64, Row>> {
 #[repr(C)]
 struct Row {
     id: i64,
-    columns: ColumnStore,
+    columns: RowStore,
 }
 unsafe impl Invariant for Row {}
 
 struct DataStore {
     hm: PersistentHashMap<i64, Row>,
+    session: Option<NonNull<()>>, // Will be NonNull<PHMsession<'static, i64, Row>>
 }
+
 #[repr(C)]
 pub struct TwzVTab {
     base: crate::ffi::sqlite3_vtab,
@@ -83,7 +85,6 @@ pub struct TwzCursor {
     position: i64,
     current_results: Vec<i64>,
     data: Arc<RwLock<DataStore>>,
-    // constraints: Option<Values<'a>>,
 }
 
 pub struct TwzConfig;
@@ -94,8 +95,8 @@ unsafe impl<'vtab> VTab<'vtab> for TwzVTab {
     type Cursor = TwzCursor;
 
     fn connect(
-        db: &mut crate::vtab::VTabConnection,
-        aux: Option<&Self::Aux>,
+        _db: &mut crate::vtab::VTabConnection,
+        _aux: Option<&Self::Aux>,
         args: &[&[u8]],
     ) -> crate::Result<(String, Self)> {
         let mut columns = Vec::new();
@@ -144,6 +145,7 @@ unsafe impl<'vtab> VTab<'vtab> for TwzVTab {
             data: Arc::new(RwLock::new(DataStore {
                 hm: create_hashtable_object().map_err(|e| crate::Error::ModuleError(format!("Failed to create hashtable object: {:?}", e)))?,
                 // hm: open_or_create_hashtable_object(&table_name).map_err(|e| crate::Error::ModuleError(format!("Failed to open or create hashtable object: {:?}", e)))?,
+                session: None,
             })),
         };
 
@@ -223,10 +225,21 @@ impl<'vtab> UpdateVTab<'vtab> for TwzVTab {
             _ => data.hm.len() as i64 + 1,
         };
         let column_values: Vec<TwzValue> = args.iter().skip(2).map(|v| v.into()).collect();
-        let columns = ColumnStore::from_values(&column_values)
-            .map_err(|e| crate::Error::ModuleError(format!("Failed to create ColumnStore: {}", e)))?;
+        let columns = RowStore::from_values(&column_values)
+            .map_err(|e| crate::Error::ModuleError(format!("Failed to create RowStore: {}", e)))?;
 
-        data.hm.insert(row_id, Row { id: row_id, columns });
+        // Use session if available, otherwise insert directly
+        if let Some(session_ptr) = data.session {
+            unsafe {
+                let session_ptr = session_ptr.as_ptr() as *mut PHMsession<'_, i64, Row>;
+                let session = &mut *session_ptr;
+                session.insert(row_id, Row { id: row_id, columns })
+                    .map_err(|e| crate::Error::ModuleError(format!("Failed to insert row in session: {}", e)))?;
+            }
+        } else {
+            data.hm.insert(row_id, Row { id: row_id, columns });
+        }
+
         Ok(row_id)
     }
 
@@ -248,8 +261,8 @@ impl<'vtab> UpdateVTab<'vtab> for TwzVTab {
         // Update column values (skip first two args which are rowids)
         if args.len() > 2 {
             let column_values: Vec<TwzValue> = args_iter.map(|v| v.into()).collect();
-            row.columns = ColumnStore::from_values(&column_values)
-                .map_err(|e| crate::Error::ModuleError(format!("Failed to create ColumnStore: {}", e)))?;
+            row.columns = RowStore::from_values(&column_values)
+                .map_err(|e| crate::Error::ModuleError(format!("Failed to create RowStore: {}", e)))?;
         }
         
         // Insert with new rowid (even if same as old)
@@ -261,7 +274,7 @@ impl<'vtab> UpdateVTab<'vtab> for TwzVTab {
 
 unsafe impl VTabCursor for TwzCursor {
     // Index number and string are best_index implementation dependent, with args containing the values to compare against. 
-    fn filter(&mut self, idx_num: std::os::raw::c_int, idx_str: Option<&str>, args: &crate::vtab::Values<'_>) -> crate::Result<()> {
+    fn filter(&mut self, _idx_num: std::os::raw::c_int, _idx_str: Option<&str>, _args: &crate::vtab::Values<'_>) -> crate::Result<()> {
         let data = self.data.read().unwrap();
         self.current_results = data.hm.keys().cloned().collect();
         self.position = 0;
@@ -318,3 +331,36 @@ unsafe impl VTabCursor for TwzCursor {
     }
 }
 
+impl<'vtab> TransactionVTab<'vtab> for TwzVTab {
+    fn begin(&mut self) -> crate::Result<()> {
+        let mut data = self.data.write().unwrap();
+
+        let session = data.hm.write_session()
+            .map_err(|e| crate::Error::ModuleError(format!("Failed to create write session: {}", e)))?;
+
+        let session_ptr = Box::into_raw(Box::new(session)) as *mut ();
+
+        data.session = Some(NonNull::new(session_ptr).unwrap());
+        Ok(())
+    }
+
+    fn sync(&mut self) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn commit(&mut self) -> crate::Result<()> {
+        let mut data = self.data.write().unwrap();
+        if let Some(session_ptr) = data.session.take() {
+            unsafe {
+                let session_ptr = session_ptr.as_ptr() as *mut PHMsession<'static, i64, Row>;
+                let session = Box::from_raw(session_ptr);
+                drop(session);
+            }
+        }
+        Ok(())
+    }
+
+    fn rollback(&mut self) -> crate::Result<()> {
+        todo!("Implement rollback");
+    }
+}
