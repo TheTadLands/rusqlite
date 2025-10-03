@@ -10,6 +10,7 @@ pub struct RowStore {
     columns: [TwzValue; MAX_COLUMNS],
 }
 
+#[allow(dead_code)]
 impl RowStore {
     pub fn new() -> Self {
         Self {

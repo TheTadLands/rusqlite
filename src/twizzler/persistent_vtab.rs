@@ -228,7 +228,8 @@ impl<'vtab> UpdateVTab<'vtab> for TwzVTab {
                     .map_err(|e| crate::Error::ModuleError(format!("Failed to insert row in session: {}", e)))?;
             }
         } else {
-            data.hm.insert(row_id, Row { id: row_id, columns });
+            data.hm.insert(row_id, Row { id: row_id, columns })
+                .map_err(|e| crate::Error::ModuleError(format!("Failed to insert row: {}", e)))?;
         }
 
         Ok(row_id)
@@ -257,7 +258,7 @@ impl<'vtab> UpdateVTab<'vtab> for TwzVTab {
         }
         
         // Insert with new rowid (even if same as old)
-        data.hm.insert(new_rowid, row);
+        data.hm.insert(new_rowid, row).map_err(|e| crate::Error::ModuleError(format!("Failed to update row: {}", e)))?;
         
         Ok(())
     }

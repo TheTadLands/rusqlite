@@ -13,11 +13,12 @@ pub enum TwzValue {
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
-struct FixedString<const N: usize> {
+pub struct FixedString<const N: usize> {
     data: [u8; N],
     len: u64,
 }
 
+#[allow(dead_code)]
 impl<const N: usize> FixedString<N> {
     fn new(data: &[u8]) -> Self {
         let mut buf = [0; N];
